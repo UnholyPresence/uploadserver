@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+
+# Captured POST bodies may contain engagement data.
+uploads/
