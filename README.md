@@ -1,5 +1,9 @@
 # Lightweight POST Receiver
 
+> **Work in progress:** This project is under active development. The current
+> implementation is functional but intentionally minimal; review the documented
+> limitations before using it during an engagement.
+
 A minimal Python HTTP server that receives raw POST request bodies and writes
 them to disk. It is intended as a quick file-catching endpoint during
 authorized penetration tests and red-team exercises—the receiving counterpart
