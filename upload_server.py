@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Minimal HTTP endpoint for saving raw POST request bodies to disk.
+
+The server listens on all interfaces at TCP port 8000. Each POST body is saved
+under ``./uploads`` relative to the process's working directory. Callers may
+provide the output filename through the ``name`` query parameter.
+"""
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -10,7 +16,10 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 
 class UploadHandler(BaseHTTPRequestHandler):
+    """Handle HTTP POST requests containing a raw file body."""
+
     def do_POST(self):
+        """Save the request body and return HTTP 201 with the destination."""
         length = int(self.headers.get("Content-Length", "0"))
         data = self.rfile.read(length)
 
