@@ -84,13 +84,16 @@ def reserve_destination(upload_dir, filename, allow_overwrite):
 class UploadServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address, handler_cls, upload_dir, max_size, allow_overwrite, token, compute_hash):
+    def __init__(
+        self, server_address, handler_cls, upload_dir, max_size, allow_overwrite, token, compute_hash, upload_path
+    ):
         super().__init__(server_address, handler_cls)
         self.upload_dir = upload_dir
         self.max_size = max_size
         self.allow_overwrite = allow_overwrite
         self.token = token
         self.compute_hash = compute_hash
+        self.upload_path = upload_path
 
 
 class UploadHandler(BaseHTTPRequestHandler):
@@ -112,6 +115,10 @@ class UploadHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authorized():
             self._reject_unauthorized()
+            return
+
+        if urlparse(self.path).path != self.server.upload_path:
+            self._send_body(404, "not found")
             return
 
         start = time.monotonic()
@@ -260,6 +267,11 @@ def parse_args(argv=None):
         action="store_true",
         help="compute a SHA-256 digest of each upload while streaming and return it",
     )
+    parser.add_argument(
+        "--path",
+        default="/",
+        help="only accept uploads POSTed to this path; other paths get 404 (default: /)",
+    )
     return parser.parse_args(argv)
 
 
@@ -267,13 +279,22 @@ def main(argv=None):
     args = parse_args(argv)
     upload_dir = Path(args.dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_path = args.path if args.path.startswith("/") else "/" + args.path
 
     server = UploadServer(
-        (args.bind, args.port), UploadHandler, upload_dir, args.max_size, args.overwrite, args.token, args.hash
+        (args.bind, args.port),
+        UploadHandler,
+        upload_dir,
+        args.max_size,
+        args.overwrite,
+        args.token,
+        args.hash,
+        upload_path,
     )
 
     print(f"Listening on {args.bind}:{args.port}")
     print(f"  Upload directory : {upload_dir.resolve()}/")
+    print(f"  Upload endpoint  : POST {upload_path}")
     print(f"  Max upload size  : {human_size(args.max_size)}")
     print(f"  Overwrite mode   : {'on' if args.overwrite else 'off (numeric suffixes)'}")
     print("  Concurrency      : threaded (one worker per connection)")

