@@ -72,13 +72,34 @@ $ curl --data-binary @payload.bin "http://RECEIVER_IP:8000/"
 Uploading a name that already exists on disk does not overwrite it by
 default — the receiver adds a numeric suffix (`loot.zip`, `loot.1.zip`,
 `loot.2.zip`, ...). Pass `--overwrite` at startup if you want same-name
-uploads to replace the existing file instead.
+uploads to replace the existing file instead. Destination names are claimed
+atomically, so simultaneous uploads to the same name never collide or clobber
+each other, even with `--overwrite` off.
+
+Check readiness with the health endpoint:
+
+```console
+$ curl http://RECEIVER_IP:8000/health
+ok
+```
+
+Add `?format=json` (or send `Accept: application/json`) to any request,
+including uploads, to get a JSON response instead of plain text:
+
+```console
+$ curl "http://RECEIVER_IP:8000/health?format=json"
+{"status": 200, "message": "ok", "upload_dir": "/path/to/uploads", "max_size": 1073741824, "overwrite": false}
+
+$ curl --data-binary @loot.zip "http://RECEIVER_IP:8000/?name=loot.zip&format=json"
+{"status": 201, "message": "Saved 42817 bytes to uploads/loot.zip", "bytes": 42817, "elapsed_seconds": 0.012, "filename": "loot.zip"}
+```
 
 Press `Ctrl-C` in the receiver terminal to stop the server.
 
 ## Current behavior and limitations
 
-- Only POST requests are handled.
+- POST saves a file; `GET /health` reports the running configuration; any
+  other path or method returns `404`.
 - The request body is treated as opaque binary data; multipart form uploads
   are not parsed.
 - Filenames are reduced to their basename before being placed in the upload
@@ -89,7 +110,8 @@ Press `Ctrl-C` in the receiver terminal to stop the server.
   uploads don't leave a truncated file at the final destination.
 - `Content-Length` is required and validated; missing, non-numeric, negative,
   or over-`--max-size` requests are rejected before any data is read.
-- The server handles one request at a time.
+- Requests are handled concurrently (one thread per connection), so a slow
+  or large upload doesn't block other clients.
 - There is no authentication, encryption, or access control.
 
 Because the listener binds to every network interface, use host firewall rules
