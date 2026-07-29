@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import tempfile
 import time
 import uuid
@@ -267,10 +268,16 @@ def parse_args(argv=None):
         action="store_true",
         help="compute a SHA-256 digest of each upload while streaming and return it",
     )
-    parser.add_argument(
+    path_group = parser.add_mutually_exclusive_group()
+    path_group.add_argument(
         "--path",
         default="/",
         help="only accept uploads POSTed to this path; other paths get 404 (default: /)",
+    )
+    path_group.add_argument(
+        "--random-path",
+        action="store_true",
+        help="use a random, unguessable upload path instead of --path (printed at startup)",
     )
     return parser.parse_args(argv)
 
@@ -279,7 +286,10 @@ def main(argv=None):
     args = parse_args(argv)
     upload_dir = Path(args.dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    upload_path = args.path if args.path.startswith("/") else "/" + args.path
+    if args.random_path:
+        upload_path = "/" + secrets.token_hex(8)
+    else:
+        upload_path = args.path if args.path.startswith("/") else "/" + args.path
 
     server = UploadServer(
         (args.bind, args.port),
@@ -294,7 +304,8 @@ def main(argv=None):
 
     print(f"Listening on {args.bind}:{args.port}")
     print(f"  Upload directory : {upload_dir.resolve()}/")
-    print(f"  Upload endpoint  : POST {upload_path}")
+    endpoint_note = " (randomly generated this run -- won't repeat on restart)" if args.random_path else ""
+    print(f"  Upload endpoint  : POST {upload_path}{endpoint_note}")
     print(f"  Max upload size  : {human_size(args.max_size)}")
     print(f"  Overwrite mode   : {'on' if args.overwrite else 'off (numeric suffixes)'}")
     print("  Concurrency      : threaded (one worker per connection)")

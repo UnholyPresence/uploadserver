@@ -43,6 +43,7 @@ $ python3 upload_server.py --bind 0.0.0.0 --port 8443 --dir /tmp/loot \
 | `--token` | none (disabled) | Require this bearer token on every request |
 | `--hash` | off | Compute and return a SHA-256 digest of each upload |
 | `--path` | `/` | Only accept uploads POSTed to this path; other paths get `404` |
+| `--random-path` | off | Use a random unguessable path instead of `--path` (mutually exclusive with it) |
 
 Send a file as the raw request body:
 
@@ -138,6 +139,22 @@ Requests to any other path get `404`, same as an unknown `GET` path. This
 check runs after the (optional) auth check but before anything else, so a
 POST to the wrong path never touches disk. `GET /health` is unaffected by
 `--path` and always stays available for readiness checks.
+
+Instead of choosing your own path, pass `--random-path` to have the receiver
+generate one (16 hex characters, from `secrets.token_hex`) and print it in
+the startup banner:
+
+```console
+$ python3 upload_server.py --random-path
+Listening on 0.0.0.0:8000
+  Upload directory : /path/to/uploads/
+  Upload endpoint  : POST /eb455723f75acfc8 (randomly generated this run -- won't repeat on restart)
+  ...
+```
+
+Copy the printed path before distributing it to sender hosts — it's
+regenerated on every restart and not recoverable afterward. `--path` and
+`--random-path` are mutually exclusive.
 
 Press `Ctrl-C` in the receiver terminal to stop the server.
 
