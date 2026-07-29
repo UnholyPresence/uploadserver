@@ -41,6 +41,7 @@ $ python3 upload_server.py --bind 0.0.0.0 --port 8443 --dir /tmp/loot \
 | `--max-size` | `1073741824` (1 GiB) | Maximum accepted body size in bytes; `0` disables the limit |
 | `--overwrite` | off | Overwrite existing files instead of adding a numeric suffix |
 | `--token` | none (disabled) | Require this bearer token on every request |
+| `--hash` | off | Compute and return a SHA-256 digest of each upload |
 
 Send a file as the raw request body:
 
@@ -107,6 +108,19 @@ $ curl -H "Authorization: Bearer s3cr3t" --data-binary @loot.zip \
 ```
 
 Auth is disabled by default (no `--token` given).
+
+Pass `--hash` to have the receiver compute a SHA-256 digest of each upload
+while it streams to disk, at no extra pass over the data:
+
+```console
+$ python3 upload_server.py --hash
+$ curl --data-binary @loot.zip "http://RECEIVER_IP:8000/?name=loot.zip"
+Saved 42817 bytes to uploads/loot.zip
+SHA-256: 3a7bd3e2360a3d...
+```
+
+With `?format=json` the digest is returned as a `sha256` field instead.
+Hashing is skipped entirely unless `--hash` is passed.
 
 Press `Ctrl-C` in the receiver terminal to stop the server.
 

@@ -7,6 +7,7 @@ the ``name`` query parameter. ``GET /health`` reports readiness.
 """
 
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -83,12 +84,13 @@ def reserve_destination(upload_dir, filename, allow_overwrite):
 class UploadServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address, handler_cls, upload_dir, max_size, allow_overwrite, token):
+    def __init__(self, server_address, handler_cls, upload_dir, max_size, allow_overwrite, token, compute_hash):
         super().__init__(server_address, handler_cls)
         self.upload_dir = upload_dir
         self.max_size = max_size
         self.allow_overwrite = allow_overwrite
         self.token = token
+        self.compute_hash = compute_hash
 
 
 class UploadHandler(BaseHTTPRequestHandler):
@@ -128,14 +130,14 @@ class UploadHandler(BaseHTTPRequestHandler):
         filename = sanitize_filename(requested_name) or default_filename()
         destination = reserve_destination(self.server.upload_dir, filename, self.server.allow_overwrite)
 
-        bytes_written, error = self._stream_to_disk(destination, length)
+        bytes_written, digest, error = self._stream_to_disk(destination, length)
         if error is not None:
             if not self.server.allow_overwrite:
                 destination.unlink(missing_ok=True)  # drop the empty reservation placeholder
             self._finish(400, error, destination.name, bytes_written, start)
             return
 
-        self._finish(201, f"Saved {bytes_written} bytes to {destination}", destination.name, bytes_written, start)
+        self._finish(201, f"Saved {bytes_written} bytes to {destination}", destination.name, bytes_written, start, digest)
 
     def _parse_content_length(self):
         header = self.headers.get("Content-Length")
@@ -153,6 +155,7 @@ class UploadHandler(BaseHTTPRequestHandler):
         """Write the request body to a temp file, then atomically publish it."""
         fd, tmp_path = tempfile.mkstemp(dir=self.server.upload_dir, prefix=".upload-", suffix=".part")
         written = 0
+        hasher = hashlib.sha256() if self.server.compute_hash else None
         try:
             with os.fdopen(fd, "wb") as tmp_file:
                 remaining = length
@@ -161,28 +164,32 @@ class UploadHandler(BaseHTTPRequestHandler):
                     if not chunk:
                         raise ConnectionError("client closed the connection before sending the full body")
                     tmp_file.write(chunk)
+                    if hasher is not None:
+                        hasher.update(chunk)
                     written += len(chunk)
                     remaining -= len(chunk)
         except Exception as exc:
             os.unlink(tmp_path)
-            return written, str(exc)
+            return written, None, str(exc)
 
         os.replace(tmp_path, destination)
-        return written, None
+        return written, (hasher.hexdigest() if hasher is not None else None), None
 
-    def _finish(self, status, message, saved_name, byte_count, start):
+    def _finish(self, status, message, saved_name, byte_count, start, digest=None):
         elapsed = time.monotonic() - start
         extra = {"bytes": byte_count, "elapsed_seconds": round(elapsed, 3)}
         if saved_name is not None:
             extra["filename"] = saved_name
+        if digest is not None:
+            extra["sha256"] = digest
         try:
             self._send_body(status, message, extra)
         except Exception:
             pass  # connection may already be gone
-        self.log_message(
-            "%s",
-            f"name={saved_name!r} bytes={byte_count} status={status} elapsed={elapsed:.3f}s",
-        )
+        log_line = f"name={saved_name!r} bytes={byte_count} status={status} elapsed={elapsed:.3f}s"
+        if digest is not None:
+            log_line += f" sha256={digest}"
+        self.log_message("%s", log_line)
 
     def _wants_json(self):
         query = parse_qs(urlparse(self.path).query)
@@ -205,13 +212,17 @@ class UploadHandler(BaseHTTPRequestHandler):
         self._send_body(401, "Unauthorized: valid bearer token required", headers={"WWW-Authenticate": "Bearer"})
 
     def _send_body(self, status, message, extra=None, headers=None):
+        extra = extra or {}
         if self._wants_json():
             payload = {"status": status, "message": message}
-            payload.update(extra or {})
+            payload.update(extra)
             body = json.dumps(payload).encode()
             content_type = "application/json"
         else:
-            body = (message + "\n").encode()
+            text = message
+            if "sha256" in extra:
+                text += f"\nSHA-256: {extra['sha256']}"
+            body = (text + "\n").encode()
             content_type = "text/plain"
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -244,6 +255,11 @@ def parse_args(argv=None):
         help="require this bearer token (Authorization: Bearer TOKEN) on every request; "
         "auth is disabled by default",
     )
+    parser.add_argument(
+        "--hash",
+        action="store_true",
+        help="compute a SHA-256 digest of each upload while streaming and return it",
+    )
     return parser.parse_args(argv)
 
 
@@ -253,7 +269,7 @@ def main(argv=None):
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     server = UploadServer(
-        (args.bind, args.port), UploadHandler, upload_dir, args.max_size, args.overwrite, args.token
+        (args.bind, args.port), UploadHandler, upload_dir, args.max_size, args.overwrite, args.token, args.hash
     )
 
     print(f"Listening on {args.bind}:{args.port}")
@@ -263,6 +279,7 @@ def main(argv=None):
     print("  Concurrency      : threaded (one worker per connection)")
     print("  Health check     : GET /health")
     print(f"  Authentication   : {'bearer token required' if args.token else 'disabled'}")
+    print(f"  Checksums        : {'SHA-256' if args.hash else 'disabled'}")
     if args.bind == "0.0.0.0":
         print("  WARNING: bound to all interfaces (0.0.0.0) -- restrict with host firewall rules")
 
