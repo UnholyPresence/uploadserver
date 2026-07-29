@@ -7,6 +7,7 @@ the ``name`` query parameter. ``GET /health`` reports readiness.
 """
 
 import argparse
+import hmac
 import json
 import os
 import re
@@ -82,17 +83,21 @@ def reserve_destination(upload_dir, filename, allow_overwrite):
 class UploadServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address, handler_cls, upload_dir, max_size, allow_overwrite):
+    def __init__(self, server_address, handler_cls, upload_dir, max_size, allow_overwrite, token):
         super().__init__(server_address, handler_cls)
         self.upload_dir = upload_dir
         self.max_size = max_size
         self.allow_overwrite = allow_overwrite
+        self.token = token
 
 
 class UploadHandler(BaseHTTPRequestHandler):
     """Handle HTTP requests: POST saves a file, GET /health reports status."""
 
     def do_GET(self):
+        if not self._authorized():
+            self._reject_unauthorized()
+            return
         if urlparse(self.path).path == "/health":
             self._send_body(200, "ok", {
                 "upload_dir": str(self.server.upload_dir),
@@ -103,6 +108,10 @@ class UploadHandler(BaseHTTPRequestHandler):
         self._send_body(404, "not found")
 
     def do_POST(self):
+        if not self._authorized():
+            self._reject_unauthorized()
+            return
+
         start = time.monotonic()
 
         length, status, message = self._parse_content_length()
@@ -181,7 +190,21 @@ class UploadHandler(BaseHTTPRequestHandler):
             return True
         return "application/json" in self.headers.get("Accept", "").lower()
 
-    def _send_body(self, status, message, extra=None):
+    def _authorized(self):
+        token = self.server.token
+        if not token:
+            return True
+        header = self.headers.get("Authorization", "")
+        prefix = "Bearer "
+        if not header.startswith(prefix):
+            return False
+        supplied = header[len(prefix):]
+        return hmac.compare_digest(supplied, token)
+
+    def _reject_unauthorized(self):
+        self._send_body(401, "Unauthorized: valid bearer token required", headers={"WWW-Authenticate": "Bearer"})
+
+    def _send_body(self, status, message, extra=None, headers=None):
         if self._wants_json():
             payload = {"status": status, "message": message}
             payload.update(extra or {})
@@ -193,6 +216,8 @@ class UploadHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -213,6 +238,12 @@ def parse_args(argv=None):
         action="store_true",
         help="overwrite existing files with the same name instead of adding a numeric suffix",
     )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="require this bearer token (Authorization: Bearer TOKEN) on every request; "
+        "auth is disabled by default",
+    )
     return parser.parse_args(argv)
 
 
@@ -221,7 +252,9 @@ def main(argv=None):
     upload_dir = Path(args.dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    server = UploadServer((args.bind, args.port), UploadHandler, upload_dir, args.max_size, args.overwrite)
+    server = UploadServer(
+        (args.bind, args.port), UploadHandler, upload_dir, args.max_size, args.overwrite, args.token
+    )
 
     print(f"Listening on {args.bind}:{args.port}")
     print(f"  Upload directory : {upload_dir.resolve()}/")
@@ -229,6 +262,7 @@ def main(argv=None):
     print(f"  Overwrite mode   : {'on' if args.overwrite else 'off (numeric suffixes)'}")
     print("  Concurrency      : threaded (one worker per connection)")
     print("  Health check     : GET /health")
+    print(f"  Authentication   : {'bearer token required' if args.token else 'disabled'}")
     if args.bind == "0.0.0.0":
         print("  WARNING: bound to all interfaces (0.0.0.0) -- restrict with host firewall rules")
 
